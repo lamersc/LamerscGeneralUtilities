@@ -25,6 +25,10 @@ local new_label = tm.playerUI.AddUILabel
 local new_input = tm.playerUI.AddUIText
 local change_ui = tm.playerUI.SetUIValue
 local new_vector3 = tm.vector3.Create
+local add_vector3 = tm.vector3.op_Addition
+local subtract_vector3 = tm.vector3.op_Subtraction
+local multiply_vector3 = tm.vector3.op_Multiply
+local divide_vector3 = tm.vector3.op_Division
 local trailmakers_prefabs = tm.physics.SpawnableNames()
 
 local character_set = "AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz1234567890"
@@ -69,6 +73,18 @@ function number_type(number)
       return "float"
   end
 end
+function multiline_string(text)
+  local last_space = 1
+  for i = 1, #text do
+    if text:sub(i, i) == " " then
+      last_space = i
+    end
+    if i % 31 == 0 then
+      text = text:sub(1, last_space) .. "\n" .. text:sub(last_space + 1)
+    end
+  end
+  return text
+end
 
 
 -- user interface framework for Trailmakers
@@ -80,7 +96,14 @@ function render_ui(definition, player_id)
   }
   if definition.meta ~= nil then
     for key, value in pairs(definition.meta) do
-      meta_data[key] = value
+      -- `_` is used to represent internal renderer data
+      if key == "_" then
+        for key2, value2 in pairs(value) do
+          meta_data["_"][key2] = value2
+        end
+      else
+        meta_data[key] = value
+      end
     end
   end
   for i = 1, #definition do
@@ -94,7 +117,7 @@ function render_ui(definition, player_id)
     end
 
     -- check for dynamic elements
-    if type(parameters.text) == "function" then
+    if type(parameters.text) == "function" and name ~= "page-carousel" then
       parameters.text = parameters.text(meta_data)
     end
     if table_contains(parameters.access, player_id) == true then
@@ -132,7 +155,7 @@ function render_ui(definition, player_id)
       elseif name == "input" then
         local input_type = parameters.type
         local field_title = nil
-        local default_input = parameters.text
+        local default_input = parameters.text or ""
         local colon_character = default_input:find(":")
         if colon_character ~= nil then
           field_title = default_input:sub(1, colon_character) .. " "
@@ -142,7 +165,7 @@ function render_ui(definition, player_id)
           new_input(
             player_id,
             parameters.id or random_id(8),
-            parameters.text or "",
+            default_input,
             function(data)
               if field_title ~= nil then
                 local value = data.value:sub(colon_character + 2, -1)
@@ -158,10 +181,14 @@ function render_ui(definition, player_id)
             end
           )
         elseif input_type == "number" then
+          local default_number = tonumber(parameters.text:match("%-?%d+%.?%d*"))
+          if number_type(default_number) == "integer" then
+            default_number = default_number .. ".0"
+          end
           new_input(
             player_id,
             parameters.id or random_id(8),
-            parameters.text .. "  (←←←←|→→→→)",
+            (field_title or "") .. default_number .. "  (←←←←|→→→→)",
             function(data)
               local value = data.value
               local number = tonumber(value:match("%-?%d+%.?%d*"))
@@ -176,13 +203,15 @@ function render_ui(definition, player_id)
                 for arrow in slider_values:gmatch("([^|]+)") do
                   table.insert(arrows, arrow)
                 end
-  
-                local left_length = #arrows[1]
-                local right_length = #arrows[2]
-                if right_length > 4 or 4 > right_length then
-                  number = number + 1
-                elseif left_length > 4 or 4 > left_length then
-                  number = number - 1
+                
+                if #arrows == 2 then
+                  local left_length = #arrows[1]
+                  local right_length = #arrows[2]
+                  if right_length > 4 or 4 > right_length then
+                    number = number + 1
+                  elseif left_length > 4 or 4 > left_length then
+                    number = number - 1
+                  end
                 end
               end
               
@@ -308,24 +337,27 @@ function render_ui(definition, player_id)
           function(data)
             results_found = {}
             local arrow_state = data.value
-            local left_length = arrow_state:match("(.*)%(")
-            if left_length == nil then left_length = 6 else left_length = #left_length end
-            local right_length = arrow_state:match("%)(.*)")
-            if right_length == nil then right_length = 6 else right_length = #right_length end
+            local left_arrow = arrow_state:match("(.*)%(")
+            if left_arrow == nil then left_arrow = 6 else left_arrow = #left_arrow end
+            local right_arrow = arrow_state:match("%)(.*)")
+            if right_arrow == nil then right_arrow = 6 else right_arrow = #right_arrow end
   
-            if right_length > left_length or left_length > right_length then
-              page = page + right_length - left_length
-              if 0 >= page then
-                page = 1
-              end
-              for i = 1, 5 do
-                local result = query_results[(page - 1) * 5 + i]
-                if result == nil then
-                  change_ui(player_id, results_ui[i], "-")
-                else
-                  change_ui(player_id, results_ui[i], result:sub(1, 27))
-                  table.insert(results_found, result)
-                end
+            if right_arrow > 6 or 6 > right_arrow then
+              page = page + 1
+            end
+            if left_arrow > 6 or 6 > left_arrow then
+              page = page - 1
+            end
+            if 0 >= page then
+              page = 1
+            end
+            for i = 1, 5 do
+              local result = query_results[(page - 1) * 5 + i]
+              if result == nil then
+                change_ui(player_id, results_ui[i], "-")
+              else
+                change_ui(player_id, results_ui[i], result:sub(1, 27))
+                table.insert(results_found, result)
               end
             end
             local page_text = tostring(page)
@@ -402,13 +434,13 @@ function render_ui(definition, player_id)
         else
           error("Invalid page type provided")
         end
+        local previous_definition = parameters.previous or table_shallowcopy(definition) -- protects original definition
         ui_call(
           player_id,
           parameters.id or random_id(8),
           parameters.text,
           function(data)
             clear_ui(player_id)
-            local previous_definition = parameters.previous or table_shallowcopy(definition) -- protects original definition
             for i, element in ipairs(previous_definition) do
               if element[1] == "event" then
                 if element[2].type == "load" then
@@ -424,12 +456,20 @@ function render_ui(definition, player_id)
                 {
                   access = { player_id },
                   text = "← Back",
-                  callback = function()
+                  callback = function(data, meta_data)
                     clear_ui(player_id)
                     for i, element in ipairs(definition_copy) do
                       if element[1] == "event" then
                         if element[2].type == "unload" then
                           element[2].callback()
+                        end
+                      end
+                    end
+                    if parameters.preserve_meta == true then
+                      local previous_meta = previous_definition.meta
+                      for key, value in pairs(meta_data) do
+                        if key ~= "_" then
+                          previous_meta[key] = value
                         end
                       end
                     end
@@ -449,6 +489,118 @@ function render_ui(definition, player_id)
             render_ui(definition_copy, player_id)
           end
         )
+      elseif name == "page-carousel" then
+        local page_array = parameters.callback(meta_data)
+        local page = 1
+        local maximum_results = parameters.display or 5
+        local button_data = {
+          --[[
+            1: `id` reference
+            2: `meta_data` for callback
+          ]]
+        }
+        for i = 1, maximum_results do
+          local id = random_id(8)
+          local page_meta = page_array[i]
+          local display_text = "-"
+          button_data[i] = {}
+          button_data[i][1] = id
+          if page_meta ~= nil then
+            display_text = parameters.text(page_meta)
+            button_data[i][2] = page_meta
+          end
+          render_ui(
+            {
+              {"page",
+                {
+                  id = id,
+                  previous = definition.previous or definition,
+                  text = display_text,
+                  callback = function()
+                    return button_data[i][2]
+                  end,
+                  definition = function()
+                    local meta_data = button_data[i][2]
+                    if meta_data == nil then
+                      return {
+                        {"event",
+                          {
+                            type = "load",
+                            callback = function(meta_data)
+                              clear_ui(player_id)
+                              render_ui(meta_data["_"].previous_definition, player_id)
+                            end
+                          }
+                        }
+                      }
+                    else
+                      return parameters.definition(button_data[i][2])
+                    end
+                  end
+                }
+              }
+            },
+            player_id
+          )
+        end
+        new_label(
+          player_id,
+          random_id(8),
+          (
+            function()
+              local results_found = #page_array
+              if results_found > 1 or results_found == 0 then
+                return "∟ " .. results_found .. " results found"
+              else
+                return "∟ 1 result found"
+              end
+            end
+          )()
+        )
+        new_input(
+          player_id,
+          random_id(8),
+          "←←←←←←(  01  )→→→→→→",
+          function(data)
+            local arrow_state = data.value
+            local left_arrow = arrow_state:match("(.*)%(")
+            if left_arrow == nil then left_arrow = 6 else left_arrow = #left_arrow end
+            local right_arrow = arrow_state:match("%)(.*)")
+            if right_arrow == nil then right_arrow = 6 else right_arrow = #right_arrow end
+
+            if right_arrow > 6 or 6 > right_arrow then
+              page = page + 1
+            end
+            if left_arrow > 6 or 6 > left_arrow then
+              page = page - 1
+            end
+            if 0 >= page then
+              page = 1
+            end
+
+            local iteration_limit = page * maximum_results
+            for i = 1, maximum_results do
+              local page_meta = page_array[page * maximum_results - maximum_results + i]
+              button_data[i][2] = page_meta
+              if page_meta == nil then
+                change_ui(player_id, button_data[i][1], "-")
+              else
+                change_ui(
+                  player_id,
+                  button_data[i][1],
+                  parameters.text(page_meta)
+                )
+              end
+            end
+
+            local page_text = tostring(page)
+            if 10 > page then
+              page_text = "0" .. page
+            end
+            change_ui(player_id, data.id, "←←←←←←(  " .. page_text .. "  )→→→→→→")
+          end
+        )
+        
       elseif name == "loop" then
         local loop_array = parameters.callback(meta_data)
 
@@ -457,7 +609,7 @@ function render_ui(definition, player_id)
           definition_copy.meta = value
           for _, element in ipairs(definition_copy) do
             if element[1] == "page" then
-              element[2].previous = definition
+              element[2].previous = definition.previous or definition
             end
           end
           render_ui(definition_copy, player_id)
@@ -466,6 +618,12 @@ function render_ui(definition, player_id)
       elseif name == "conditional" then
         if parameters.callback(meta_data) == true then
           parameters.definition.meta = meta_data
+          parameters.definition.previous = definition
+          for _, element in ipairs(parameters.definition) do
+            if element[1] == "page" then
+              element[2].previous = definition.previous or definition
+            end
+          end
           render_ui(parameters.definition, player_id)
         end
       else
@@ -569,12 +727,19 @@ end
 
 local prefab_search_results = {}
 for _, prefab in ipairs(trailmakers_prefabs) do
-  table.insert(prefab_search_results, prefab:sub(5, -1))
+  if (
+      prefab ~= "PFB_PoisonCloud_Explosion" and
+      prefab ~= "PFB_KungfuFlaglol" and
+      prefab ~= "PFB_Runner-Monkey"
+     ) then
+    table.insert(prefab_search_results, prefab:sub(5, -1))
+  end
 end
 
 local storage = {
   maps = {},
   editor = {
+    map_name = "",
     enabled = false,
     attributes = {
       name = "",
@@ -586,6 +751,10 @@ local storage = {
     search_config = {
       searchables = prefab_search_results,
       query = ""
+    },
+    export = {
+      name = "",
+      authors = ""
     },
     key_selectables = {}
   }
@@ -599,19 +768,24 @@ local storage = {
   }
 ]]
 function new_editor_object(data, position)
-  local object_storage = storage.editor.objects
   local name = data.name
   local grouping = data.group
 
-  local lookup_value = storage.editor.objects
-  if grouping ~= "" then
+  local lookup_value = nil
+  if type(grouping) == "table" then
+    lookup_value = grouping
+  elseif grouping ~= "" then
+    lookup_value = storage.editor.objects
     for group in string.gmatch(grouping, '([^%/]+)') do
       if lookup_value[group] == nil then
         lookup_value[group] = {}
       end
       lookup_value = lookup_value[group]
     end
+  else
+    lookup_value = storage.editor.objects
   end
+  
   if lookup_value.object ~= nil then
     return false, "group_object_name_collision"
   elseif lookup_value[name] ~= nil then
@@ -625,11 +799,15 @@ function new_editor_object(data, position)
       "PFB_" .. data.object
     )
     gameobj.SetIsStatic(true)
-    gameobj.SetIsTrigger(true)
     lookup_value[name] = {
       object = gameobj,
-      id = "PFB_" .. data.object,
-      transform = gameobj.GetTransform()
+      prefab_id = "PFB_" .. data.object,
+      transform = gameobj.GetTransform(),
+      attributes = {
+        is_trigger = false,
+        static = true,
+        visible = true
+      }
     }
     return true, nil
   end
@@ -654,67 +832,524 @@ function update_editor_message(message, reset_delay)
     )
   )
 end
+local message_reset_delay = nil
+function timed_change_ui(player_id, element_id, message_data, delay)
+  message_reset_delay = get_time() + delay
+  local original = message_data.original
+  local new = message_data.new
+  if #new > 64 then
+    new = new:sub(1, 64)
+  end
+  schedule_task(
+    "ordered",
+    coroutine.create(
+      function()
+        change_ui(player_id, element_id, new)
+        while message_reset_delay > get_time() do
+          coroutine.yield()
+        end
+        change_ui(player_id, element_id, original)
+      end
+    )
+  )
+end
 
 _G.map_editor_object_component = {
   {"conditional",
     {
       callback = function(meta_data)
-        return meta_data.type == nil
+        return meta_data.type == "group" or meta_data.type == nil
+      end,
+      definition = {
+        {"conditional",
+          {
+            callback = function(meta_data)
+              return meta_data.type == "group"
+            end,
+            definition = {
+              {"label",
+                {
+                  text = "Group Information:"
+                }
+              },
+              {"input",
+                {
+                  type = "text",
+                  text = |meta_data| "Name: " .. meta_data.name,
+                  callback = function(data, meta_data)
+                    local value = data.value
+                    local player_id = meta_data["_"].player_id
+                    if value == "" then
+                      value = "group_" .. random_id(4)
+                    end
+                    while meta_data.reference[value] ~= nil do
+                      value = data.value .. "_" .. random_id(4)
+                      if #value > 48 then
+                        value = "group_" .. random_id(4)
+                      end
+                    end
+                    meta_data.reference[value] = meta_data.reference[meta_data.name]
+                    meta_data.reference[meta_data.name] = nil
+                    meta_data.name = value
+      
+                    -- requires a full redraw to properly update all children with new meta data.
+                    -- it's odd, but works well.
+                    clear_ui(player_id)
+                    meta_data["_"].definition.meta = meta_data
+                    render_ui(meta_data["_"].definition, player_id)
+                  end
+                }
+              },
+              {"page",
+                {
+                  text = "Properties",
+                  definition = {
+                    {"event",
+                      {
+                        type = "draw",
+                        callback = function(meta_data)
+                          local lookup_data = {}
+                          local transforms = {}
+                          local game_objects = {}
+                          local center_point = new_vector3()
+                          local object_count = 0
 
-      end,
-      definition = {
-        {"label",
-          {
-            text = "::::::::::::::::::Top Level::::::::::::::::::"
-          }
-        }
-      }
-    }
-  },
-  {"conditional",
-    {
-      callback = function(meta_data)
-        return meta_data.type == "group"
-      end,
-      definition = {
-        {"label",
-          {
-            text = "::::::::::::Group Information::::::::::::"
+                          for _, value in pairs(meta_data.reference[meta_data.name]) do
+                            table.insert(lookup_data, value)
+                          end
+
+                          local i = 1
+                          while #lookup_data >= i do
+                            local value = lookup_data[i]
+                            local transform = value.transform
+                            if transform ~= nil then
+                              table.insert(transforms, transform)
+                              local position = transform.GetPosition()
+                              local rotation = transform.GetRotation()
+                              local scale = transform.GetScale()
+                              table.insert(game_objects,
+                                {
+                                  transform = transform,
+                                  object = value.object,
+                                  initial_pos = new_vector3(
+                                    position.x,
+                                    position.y,
+                                    position.z
+                                  ),
+                                  real_pos = new_vector3(
+                                    position.x,
+                                    position.y,
+                                    position.z
+                                  ),
+                                  initial_rot = new_vector3(
+                                    rotation.x,
+                                    rotation.y,
+                                    rotation.z
+                                  ),
+                                  initial_scale = new_vector3(
+                                    scale.x,
+                                    scale.y,
+                                    scale.z
+                                  )
+                                }
+                              )
+                              center_point = add_vector3(center_point, position)
+                              object_count = object_count + 1
+                            else
+                              for _, inner_value in pairs(value) do
+                                table.insert(lookup_data, inner_value)
+                              end
+                            end
+                            i = i + 1
+                          end
+                          center_point = divide_vector3(center_point, object_count)
+                          return {
+                            center_point = center_point,
+                            transforms = transforms,
+                            game_objects = game_objects,
+                            position_offset = new_vector3(),
+                            scale_offset = new_vector3(1, 1, 1)
+                          }
+                        end
+                      }
+                    },
+                    {"label",
+                      {
+                        text = "Position Offset:"
+                      }
+                    },
+                    {"input",
+                      {
+                        type = "number",
+                        text = "x: 0",
+                        callback = function(data, meta_data)
+                          local value = math.floor(data.value * 1000) / 1000
+                          local position_offset = meta_data.position_offset
+                          position_offset.x = value
+
+                          for _, gameobj in ipairs(meta_data.game_objects) do
+                            gameobj.transform.SetPosition(
+                              add_vector3(gameobj.real_pos, position_offset)
+                            )
+                          end
+                        end
+                      }
+                    },
+                    {"input",
+                      {
+                        type = "number",
+                        text = "y: 0",
+                        callback = function(data, meta_data)
+                          local value = math.floor(data.value * 1000) / 1000
+                          local position_offset = meta_data.position_offset
+                          position_offset.y = value
+
+                          for _, gameobj in ipairs(meta_data.game_objects) do
+                            gameobj.transform.SetPosition(
+                              add_vector3(gameobj.real_pos, position_offset)
+                            )
+                          end
+                        end
+                      }
+                    },
+                    {"input",
+                      {
+                        type = "number",
+                        text = "z: 0",
+                        callback = function(data, meta_data)
+                          local value = math.floor(data.value * 1000) / 1000
+                          local position_offset = meta_data.position_offset
+                          position_offset.z = value
+
+                          for _, gameobj in ipairs(meta_data.game_objects) do
+                            gameobj.transform.SetPosition(
+                              add_vector3(gameobj.real_pos, position_offset)
+                            )
+                          end
+                        end
+                      }
+                    },
+                    {"label",
+                      {
+                        text = "Scale Offset:"
+                      }
+                    },
+                    {"input",
+                      {
+                        type = "number",
+                        text = "x: 1",
+                        callback = function(data, meta_data)
+                          local value = math.floor(data.value * 1000) / 1000
+                          local center_point = meta_data.center_point
+                          local scale_offset = meta_data.scale_offset
+                          
+                          for _, gameobj in ipairs(meta_data.game_objects) do
+                            local real_pos = gameobj.real_pos
+                            local initial_scale = gameobj.initial_scale
+                            local object_transform = gameobj.transform
+
+                            scale_offset.x = value
+                            object_transform.SetScale(
+                              initial_scale.x * value,
+                              initial_scale.y * scale_offset.y,
+                              initial_scale.z * scale_offset.z
+                            )
+
+                            real_pos.x = center_point.x + (gameobj.initial_pos.x - center_point.x) * value
+                            object_transform.SetPosition(
+                              add_vector3(
+                                real_pos,
+                                meta_data.position_offset
+                              )
+                            )
+                          end
+                        end
+                      }
+                    },
+                    {"input",
+                      {
+                        type = "number",
+                        text = "y: 1",
+                        callback = function(data, meta_data)
+                          local value = math.floor(data.value * 1000) / 1000
+                          local center_point = meta_data.center_point
+                          local scale_offset = meta_data.scale_offset
+
+                          for _, gameobj in ipairs(meta_data.game_objects) do
+                            local real_pos = gameobj.real_pos
+                            local initial_scale = gameobj.initial_scale
+                            local object_transform = gameobj.transform
+
+                            scale_offset.y = value
+                            object_transform.SetScale(
+                              initial_scale.x * scale_offset.x,
+                              initial_scale.y * value,
+                              initial_scale.z * scale_offset.z
+                            )
+
+                            real_pos.y = center_point.y + (gameobj.initial_pos.y - center_point.y) * value
+                            object_transform.SetPosition(
+                              add_vector3(
+                                real_pos,
+                                meta_data.position_offset
+                              )
+                            )
+                          end
+                        end
+                      }
+                    },
+                    {"input",
+                      {
+                        type = "number",
+                        text = "z: 1",
+                        callback = function(data, meta_data)
+                          local value = math.floor(data.value * 1000) / 1000
+                          local center_point = meta_data.center_point
+                          local scale_offset = meta_data.scale_offset
+
+                          for _, gameobj in ipairs(meta_data.game_objects) do
+                            local real_pos = gameobj.real_pos
+                            local initial_scale = gameobj.initial_scale
+                            local object_transform = gameobj.transform
+
+                            scale_offset.z = value
+                            object_transform.SetScale(
+                              initial_scale.x * scale_offset.x,
+                              initial_scale.y * scale_offset.y,
+                              initial_scale.z * value
+                            )
+
+                            real_pos.z = center_point.z + (gameobj.initial_pos.z - center_point.z) * value
+                            object_transform.SetPosition(
+                              add_vector3(
+                                real_pos,
+                                meta_data.position_offset
+                              )
+                            )
+                          end
+                        end
+                      }
+                    },
+                    {"label",
+                      {
+                        text = "Rotation Offset:"
+                      }
+                    },
+                    {"page",
+                      {
+                        text = "Click Me!",
+                        definition = {
+                          {"label",
+                            {
+                              text = "Note: page will be moved in\nthe future."
+                            }
+                          },
+                          {"input",
+                            {
+                              type = "number",
+                              text = "y: 0",
+                              callback = function(data, meta_data)
+                                local value = math.floor(data.value * 1000) / 1000
+                                local center_point = meta_data.center_point
+      
+                                local sin_angle = math.sin(math.rad(value))
+                                local cos_angle = math.cos(math.rad(value))
+      
+                                for _, gameobj in ipairs(meta_data.game_objects) do
+                                  local initial_pos = gameobj.initial_pos
+                                  local initial_rot = gameobj.initial_rot
+                                  local real_pos = gameobj.real_pos
+                                  local x_pos = initial_pos.x - center_point.x
+                                  local z_pos = initial_pos.z - center_point.z
+                                  
+                                  local new_position = new_vector3(
+                                    x_pos * cos_angle - z_pos * sin_angle + center_point.x,
+                                    initial_pos.y,
+                                    x_pos * sin_angle + z_pos * cos_angle + center_point.z
+                                  )
+                                  gameobj.real_pos = new_position
+                                  gameobj.transform.SetRotation(
+                                    initial_rot.x,
+                                    initial_rot.y - value,
+                                    initial_rot.z
+                                  )
+                                  gameobj.transform.SetPosition(
+                                    add_vector3(
+                                      new_position,
+                                      meta_data.position_offset
+                                    )
+                                  )
+                                end
+                              end
+                            }
+                          }
+                        }
+                      },
+                    },
+                    {"label",
+                      {
+                        text = "………………………………………."
+                      }
+                    },
+                    {"button",
+                      {
+                        text = "Delete Group",
+                        callback = function(data, meta_data)
+                          local player_id = meta_data["_"].player_id
+                          local value = data.value
+                          if value == "Delete Group" then
+                            timed_change_ui(
+                              meta_data["_"].player_id,
+                              data.id,
+                              {
+                                original = "Delete Group",
+                                new = "are you sure?"
+                              },
+                              1
+                            )
+                          else
+                            local player_id = meta_data["_"].player_id
+                            for _, transform_data in ipairs(meta_data.game_objects) do
+                              transform_data.object.Despawn()
+                            end
+                            meta_data.reference[meta_data.name] = nil
+                            clear_ui(player_id)
+                            render_ui(
+                              -- back track two pages
+                              meta_data["_"].previous_definition.meta["_"].previous_definition,
+                              player_id
+                            )
+                          end    
+                        end
+                      }
+                    }
+                  }
+                }
+              },
+              {"label",
+                {
+                  text = "……………………………………….\n" ..
+                         "Inner Groups & Objects:"
+                }
+              }
+            }
           }
         },
-        {"input",
+        {"conditional",
           {
-            type = "text",
-            text = |meta_data| "Name: " .. meta_data.name,
-            callback = function(data, meta_data)
-              local value = data.value
-              local player_id = meta_data["_"].player_id
-              if value == "" then
-                value = "group_" .. random_id(4)
+            callback = function(meta_data)
+              return meta_data.type == nil
+            end,
+            definition = {
+              {"label",
+                {
+                  text = "Group & Objects:"
+                }
+              }
+            }
+          }
+        },
+        {"page-carousel",
+          {
+            display = 5,
+            callback = function(meta_data)
+              local groupings = {}
+              local group = nil
+              if meta_data.reference ~= nil then
+                group = meta_data.reference[meta_data.name]
+              else
+                group = storage.editor.objects
               end
-              while meta_data.reference[value] ~= nil do
-                value = data.value .. "_" .. random_id(4)
-                if #value > 48 then
-                  value = "group_" .. random_id(4)
+              if type(group) == "table" then
+                for key, value in pairs(group) do
+                  table.insert(groupings,
+                    {
+                      reference = group,
+                      name = key,
+                      type = (
+                        function()
+                          if value.object == nil then
+                            return "group"
+                          else
+                            return "object"
+                          end
+                        end
+                      )()
+                    }
+                  )
                 end
               end
-              meta_data.reference[value] = meta_data.reference[meta_data.name]
-              meta_data.reference[meta_data.name] = nil
-              meta_data.name = value
-
-              -- requires a full redraw to properly update all children with new meta data.
-              -- it's odd, but works well.
-              clear_ui(player_id)
-              meta_data["_"].definition.meta = meta_data
-              render_ui(meta_data["_"].definition, player_id)
+              return groupings
+            end,
+            text = |meta_data| "[" .. meta_data.type .. "] " .. (
+              function()
+                local name = meta_data.name
+                if #name > 22 then
+                  return name:sub(1, 18) .. ".."
+                else
+                  return name
+                end
+              end
+            )(),
+            definition = function(meta_data)
+              return map_editor_object_component
             end
           }
         },
-        {"label",
+        --[[
+        {"loop",
           {
-            text = ":::::::Inner Groups & Objects::::::::"
+            callback = function(meta_data)
+              local groupings = {}
+              local group = nil
+              if meta_data.reference ~= nil then
+                group = meta_data.reference[meta_data.name]
+              else
+                group = storage.editor.objects
+              end
+              if type(group) == "table" then
+                for key, value in pairs(group) do
+                  table.insert(groupings,
+                    {
+                      reference = group,
+                      name = key,
+                      type = (
+                        function()
+                          if value.object == nil then
+                            return "group"
+                          else
+                            return "object"
+                          end
+                        end
+                      )()
+                    }
+                  )
+                end
+              end
+              return groupings
+            end,
+            definition = {
+              {"page",
+                {
+                  text = |meta_data| "[" .. meta_data.type .. "] " .. (
+                    function()
+                      local name = meta_data.name
+                      if #name > 22 then
+                        return name:sub(1, 18) .. ".."
+                      else
+                        return name
+                      end
+                    end
+                  )(),
+                  definition = function(meta_data)
+                    return map_editor_object_component
+                  end
+                }
+              }
+            }
           }
         }
+        ]]
       }
     }
   },
@@ -724,9 +1359,27 @@ _G.map_editor_object_component = {
         return meta_data.type == "object"
       end,
       definition = {
+        {"event",
+          {
+            type = "load",
+            callback = function(meta_data)
+              local object_reference = meta_data.reference[meta_data.name]
+              local object = object_reference.object
+              local transform = object_reference.transform
+              return {
+                object = object,
+                attributes = object_reference.attributes,
+                transform = transform,
+                position = transform.GetPosition(),
+                rotation = transform.GetRotation(),
+                scale = transform.GetScale()
+              }
+            end
+          }
+        },
         {"label",
           {
-            text = ":::::::::::Object Information::::::::::::"
+            text = "Object Information:"
           }
         },
         {"input",
@@ -752,6 +1405,194 @@ _G.map_editor_object_component = {
             end
           }
         },
+        {"page",
+          {
+            text = "Properties",
+            definition = {
+              {"label",
+                {
+                  text = "General Properties:"
+                }
+              },
+              {"button",
+                {
+                  text = function(meta_data)
+                    return "visible: " .. tostring(meta_data.attributes.visible)
+                  end,
+                  callback = function(data, meta_data)
+                    meta_data.attributes.visible = not meta_data.attributes.visible
+
+                    local is_visible = meta_data.attributes.visible
+                    meta_data.object.SetIsVisible(is_visible)
+                    change_ui(meta_data["_"].player_id, data.id, "visible: " .. tostring(is_visible))
+                  end
+                }
+              },
+              {"button",
+                {
+                  text = function(meta_data)
+                    return "static: " .. tostring(meta_data.attributes.static)
+                  end,
+                  callback = function(data, meta_data)
+                    meta_data.attributes.static = not meta_data.attributes.static
+
+                    local is_static = meta_data.attributes.static
+                    meta_data.object.SetIsStatic(is_static)
+                    change_ui(meta_data["_"].player_id, data.id, "static: " .. tostring(is_static))
+                  end
+                }
+              },
+              {"button",
+                {
+                  text = function(meta_data)
+                    return "is trigger: " .. tostring(meta_data.attributes.is_trigger)
+                  end,
+                  callback = function(data, meta_data)
+                    meta_data.attributes.is_trigger = not meta_data.attributes.is_trigger
+
+                    local is_trigger = meta_data.attributes.is_trigger
+                    meta_data.object.SetIsTrigger(is_trigger)
+                    change_ui(meta_data["_"].player_id, data.id, "is trigger: " .. tostring(is_trigger))
+                  end
+                }
+              }
+            }
+          }
+        },
+        {"button",
+          {
+            id = "duplicate_button",
+            text = "Duplicate Object",
+            callback = function(data, meta_data)
+              --[[
+              object = gameobj,
+              prefab_id = "PFB_" .. data.object,
+              transform = gameobj.GetTransform(),
+              attributes = {
+                is_trigger = false,
+                static = true,
+                visible = true
+              }
+              ]]
+              local name = meta_data.name
+              local group_reference = meta_data.reference
+              local current_object = group_reference[name]
+              local current_attributes = current_object.attributes
+              local transform = current_object.transform
+              local position = transform.GetPosition()
+              while true do
+                local new_name = name .. "_" .. random_id(4)
+                local status, new_gameobj = new_editor_object(
+                  {
+                    name = new_name,
+                    group = group_reference,
+                    object = current_object.prefab_id:sub(5, -1)
+                  },
+                  position
+                )
+                if status == true then
+                  local new_gameobj = group_reference[new_name]
+                  local object_reference = new_gameobj.object
+                  local new_transform = new_gameobj.transform
+                  new_transform.SetRotation(transform.GetRotation())
+                  new_transform.SetScale(transform.GetScale())
+                  local new_attributes = new_gameobj.attributes
+                  new_attributes.is_trigger = current_attributes.is_trigger
+                  object_reference.SetIsTrigger(new_attributes.is_trigger)
+                  new_attributes.static = current_attributes.static
+                  object_reference.SetIsStatic(new_attributes.static)
+                  new_attributes.visible = current_attributes.visible
+                  object_reference.SetIsVisible(new_attributes.visible)
+                  break
+                end
+              end
+              timed_change_ui(
+                0,
+                "duplicate_button",
+                {
+                  original = "Duplicate Object",
+                  new = "Duplicated Successfully!"
+                },
+                1
+              )
+            end
+          }
+        },
+        {"page",
+          {
+            preserve_meta = true,
+            text = "Change Group",
+            definition = {
+              {"label",
+                {
+                  text = "Enter the new target group:"
+                }
+              },
+              {"input",
+                {
+                  type = "text",
+                  text = |meta_data| meta_data.new_group_path or "",
+                  callback = function(data, meta_data)
+                    meta_data.new_group_path = data.value
+                  end
+                }
+              },
+              {"button",
+                {
+                  id = "change_group_button",
+                  text = "Change Group",
+                  callback = function(data, meta_data)
+                    local name = meta_data.name
+                    local lookup_value = storage.editor.objects
+                    for group in string.gmatch((meta_data.new_group_path or ""), '([^%/]+)') do
+                      if lookup_value[group] == nil then
+                        lookup_value[group] = {}
+                      end
+                      lookup_value = lookup_value[group]
+                    end
+                    if lookup_value.object ~= nil then
+                      timed_change_ui(
+                        0,
+                        "change_group_button",
+                        {
+                          original = "Change Group",
+                          new = "group name →|← object name."
+                        },
+                        3
+                      )
+                    elseif lookup_value[name] ~= nil then
+                      timed_change_ui(
+                        0,
+                        "change_group_button",
+                        {
+                          original = "Change Group",
+                          new = "object name exists in group."
+                        },
+                        3
+                      )
+                    elseif type(lookup_value[name]) == "table" then
+                      timed_change_ui(
+                        0,
+                        "change_group_button",
+                        {
+                          original = "Change Group",
+                          new = "object name →|← group name."
+                        },
+                        3
+                      )
+                    else
+                      lookup_value[name] = meta_data.reference[name]
+                      meta_data.reference[name] = nil
+                      local player_id = meta_data["_"].player_id
+                      clear_ui(player_id)
+                      render_ui(meta_data["_"].previous_definition.meta["_"].previous_definition, player_id)
+                    end
+                  end
+                }
+              }
+            }
+          }
+        },
         {"label",
           {
             text = "Position:"
@@ -760,10 +1601,11 @@ _G.map_editor_object_component = {
         {"input",
           {
             type = "number",
-            text = |meta_data| "x: " .. math.floor(meta_data.reference[meta_data.name].transform.GetPosition().x * 1000) / 1000,
+            id = "position_x",
+            text = |meta_data| "x: " .. math.floor(meta_data.position.x * 1000) / 1000,
             callback = function(data, meta_data)
               local value = math.floor(data.value * 1000) / 1000
-              local transform = meta_data.reference[meta_data.name].transform
+              local transform = meta_data.transform
               local current_position = transform.GetPosition()
               meta_data.reference[meta_data.name].transform.SetPosition(value, current_position.y, current_position.z)
             end
@@ -772,10 +1614,11 @@ _G.map_editor_object_component = {
         {"input",
           {
             type = "number",
-            text = |meta_data| "y: " .. math.floor(meta_data.reference[meta_data.name].transform.GetPosition().y * 1000) / 1000,
+            id = "position_y",
+            text = |meta_data| "y: " .. math.floor(meta_data.position.y * 1000) / 1000,
             callback = function(data, meta_data)
               local value = math.floor(data.value * 1000) / 1000
-              local transform = meta_data.reference[meta_data.name].transform
+              local transform = meta_data.transform
               local current_position = transform.GetPosition()
               meta_data.reference[meta_data.name].transform.SetPosition(current_position.x, value, current_position.z)
             end
@@ -784,10 +1627,11 @@ _G.map_editor_object_component = {
         {"input",
           {
             type = "number",
-            text = |meta_data| "z: " .. math.floor(meta_data.reference[meta_data.name].transform.GetPosition().z * 1000) / 1000,
+            id = "position_z",
+            text = |meta_data| "z: " .. math.floor(meta_data.position.z * 1000) / 1000,
             callback = function(data, meta_data)
               local value = math.floor(data.value * 1000) / 1000
-              local transform = meta_data.reference[meta_data.name].transform
+              local transform = meta_data.transform
               local current_position = transform.GetPosition()
               meta_data.reference[meta_data.name].transform.SetPosition(current_position.x, current_position.y, value)
             end
@@ -801,10 +1645,10 @@ _G.map_editor_object_component = {
         {"input",
           {
             type = "number",
-            text = |meta_data| "x: " .. math.floor(meta_data.reference[meta_data.name].transform.GetRotation().x * 1000) / 1000,
+            text = |meta_data| "x: " .. math.floor(meta_data.rotation.x * 1000) / 1000,
             callback = function(data, meta_data)
               local value = math.floor(data.value * 1000) / 1000
-              local transform = meta_data.reference[meta_data.name].transform
+              local transform = meta_data.transform
               local current_rotation = transform.GetRotation()
               meta_data.reference[meta_data.name].transform.SetRotation(value, current_rotation.y, current_rotation.z)
             end
@@ -813,10 +1657,10 @@ _G.map_editor_object_component = {
         {"input",
           {
             type = "number",
-            text = |meta_data| "y: " .. math.floor(meta_data.reference[meta_data.name].transform.GetRotation().y * 1000) / 1000,
+            text = |meta_data| "y: " .. math.floor(meta_data.rotation.y * 1000) / 1000,
             callback = function(data, meta_data)
               local value = math.floor(data.value * 1000) / 1000
-              local transform = meta_data.reference[meta_data.name].transform
+              local transform = meta_data.transform
               local current_rotation = transform.GetRotation()
               meta_data.reference[meta_data.name].transform.SetRotation(current_rotation.x, value, current_rotation.z)
             end
@@ -825,10 +1669,10 @@ _G.map_editor_object_component = {
         {"input",
           {
             type = "number",
-            text = |meta_data| "z: " .. math.floor(meta_data.reference[meta_data.name].transform.GetRotation().z * 1000) / 1000,
+            text = |meta_data| "z: " .. math.floor(meta_data.rotation.z * 1000) / 1000,
             callback = function(data, meta_data)
               local value = math.floor(data.value * 1000) / 1000
-              local transform = meta_data.reference[meta_data.name].transform
+              local transform = meta_data.transform
               local current_rotation = transform.GetRotation()
               meta_data.reference[meta_data.name].transform.SetRotation(current_rotation.x, current_rotation.y, value)
             end
@@ -842,10 +1686,10 @@ _G.map_editor_object_component = {
         {"input",
           {
             type = "number",
-            text = |meta_data| "x: " .. math.floor(meta_data.reference[meta_data.name].transform.GetScale().x * 1000) / 1000,
+            text = |meta_data| "x: " .. math.floor(meta_data.scale.x * 1000) / 1000,
             callback = function(data, meta_data)
               local value = math.floor(data.value * 1000) / 1000
-              local transform = meta_data.reference[meta_data.name].transform
+              local transform = meta_data.transform
               local current_scale = transform.GetScale()
               meta_data.reference[meta_data.name].transform.SetScale(value, current_scale.y, current_scale.z)
             end
@@ -854,10 +1698,10 @@ _G.map_editor_object_component = {
         {"input",
           {
             type = "number",
-            text = |meta_data| "y: " .. math.floor(meta_data.reference[meta_data.name].transform.GetScale().y * 1000) / 1000,
+            text = |meta_data| "y: " .. math.floor(meta_data.scale.y * 1000) / 1000,
             callback = function(data, meta_data)
               local value = math.floor(data.value * 1000) / 1000
-              local transform = meta_data.reference[meta_data.name].transform
+              local transform = meta_data.transform
               local current_scale = transform.GetScale()
               meta_data.reference[meta_data.name].transform.SetScale(current_scale.x, value, current_scale.z)
             end
@@ -866,10 +1710,10 @@ _G.map_editor_object_component = {
         {"input",
           {
             type = "number",
-            text = |meta_data| "z: " .. math.floor(meta_data.reference[meta_data.name].transform.GetScale().z * 1000) / 1000,
+            text = |meta_data| "z: " .. math.floor(meta_data.scale.z * 1000) / 1000,
             callback = function(data, meta_data)
               local value = math.floor(data.value * 1000) / 1000
-              local transform = meta_data.reference[meta_data.name].transform
+              local transform = meta_data.transform
               local current_scale = transform.GetScale()
               meta_data.reference[meta_data.name].transform.SetScale(current_scale.x, current_scale.y, value)
             end
@@ -881,82 +1725,22 @@ _G.map_editor_object_component = {
             callback = function(data, meta_data)
               local value = data.value
               if value == "Delete Object" then
-                change_ui(0, data.id, "are you sure?")
-                local current_time = get_time() + 1
-                schedule_task(
-                  "ordered",
-                  coroutine.create(
-                    function()
-                      while current_time > get_time() do
-                        coroutine.yield()
-                      end
-                      change_ui(0, data.id, "Delete Object")
-                    end
-                  )
+                timed_change_ui(
+                  meta_data["_"].player_id,
+                  data.id,
+                  {
+                    original = "Delete Object",
+                    new = "are you sure?"
+                  },
+                  1
                 )
               else
+                local player_id = meta_data["_"].player_id
                 meta_data.reference[meta_data.name].object.Despawn()
                 meta_data.reference[meta_data.name] = nil
-                clear_ui(0)
-                render_ui(meta_data["_"].previous_definition, meta_data["_"].player_id)
+                clear_ui(player_id)
+                render_ui(meta_data["_"].previous_definition, player_id)
               end
-            end
-          }
-        }
-      }
-    }
-  },
-  {"loop",
-    {
-      callback = function(meta_data)
-        if meta_data.type == "object" then
-          return {}
-        end
-        local groupings = {}
-        local group = nil
-        if meta_data.reference ~= nil then
-          group = meta_data.reference[meta_data.name]
-        else
-          group = storage.editor.objects
-        end
-        if type(group) == "table" then
-          for key, value in pairs(group) do
-            table.insert(groupings,
-              {
-                reference = group,
-                name = key,
-                type = (
-                  function()
-                    if value.object == nil then
-                      return "group"
-                    else
-                      return "object"
-                    end
-                  end
-                )()
-              }
-            )
-          end
-        end
-        return groupings
-      end,
-      definition = {
-        {"page",
-          {
-            text = |meta_data| "[" .. meta_data.type .. "] " .. (
-              function()
-                local name = meta_data.name
-                if #name > 22 then
-                  return name:sub(1, 18) .. ".."
-                else
-                  return name
-                end
-              end
-            )(),
-            definition = function(meta_data)
-              local definition_copy = table_shallowcopy(map_editor_object_component)
-              definition_copy.meta = meta_data
-              return map_editor_object_component
             end
           }
         }
@@ -964,6 +1748,97 @@ _G.map_editor_object_component = {
     }
   }
 }
+
+-- converts a table into lmf json
+function generate_save_json(object_table)
+  local save_table = {
+    objects = {}
+  }
+  for key, value in pairs(object_table) do
+    if value.object == nil then
+      value = generate_save_json(value)
+      save_table.objects[key] = value.objects
+    else
+      local position = value.transform.GetPosition()
+      local rotation = value.transform.GetRotation()
+      local scale = value.transform.GetScale()
+      local attributes = value.attributes
+      -- only a maximum of three decimal places is permitted
+      save_table.objects[key] = {
+        prefab = value.prefab_id,
+        position = {
+          math.floor(position.x * 1000) / 1000,
+          math.floor(position.y * 1000) / 1000,
+          math.floor(position.z * 1000) / 1000
+        },
+        rotation = {
+          math.floor(rotation.x * 1000) / 1000,
+          math.floor(rotation.y * 1000) / 1000,
+          math.floor(rotation.z * 1000) / 1000
+        },
+        scale = {
+          math.floor(scale.x * 1000) / 1000,
+          math.floor(scale.y * 1000) / 1000,
+          math.floor(scale.z * 1000) / 1000
+        },
+        -- [is static, is visible, is trigger]
+        attributes = {attributes.static, attributes.visible, attributes.is_trigger}
+      }
+    end
+  end
+  return save_table
+end
+
+-- loads objects that are formatted in lmf json
+function load_objects(map_table)
+  local objects = {}
+  for key, value in pairs(map_table) do
+    --[[
+      if a prefab key isn't found, then we assume the table is a group;
+      this means we need to recursively check and enact on this groups
+      objects.
+    ]]
+    if value.prefab == nil then
+      value = load_objects(value)
+      objects[key] = value
+    else
+      -- define values
+      local json_position = value.position
+      local json_rotation = value.rotation
+      local json_scale = value.scale
+      local json_attributues = value.attributes
+      local is_static = json_attributues[1]
+      local is_visible = json_attributues[2]
+      local is_trigger = json_attributues[3]
+
+      -- set object data
+      local game_object = tm.physics.SpawnObject(
+        new_vector3(json_position[1], json_position[2], json_position[3]),
+        value.prefab
+      )
+      game_object.SetIsStatic(true)
+      game_object.SetIsVisible(is_visible)
+      game_object.SetIsTrigger(is_trigger)
+      local transform = game_object.GetTransform()
+      transform.SetRotation(json_rotation[1], json_rotation[2], json_rotation[3])
+      transform.SetScale(json_scale[1], json_scale[2], json_scale[3])
+
+      -- store data in object cache
+      objects[key] = {
+        object = game_object,
+        prefab_id = value.prefab,
+        transform = transform,
+        attributes = {
+          static = is_static,
+          visible = is_visible,
+          is_trigger = is_trigger
+        }
+      }
+    end
+  end
+  return objects
+end
+
 local map_editor = {
   {"page",
     {
@@ -974,39 +1849,73 @@ local map_editor = {
     {
       type = "load",
       callback = function(meta_data)
-        print("loaded.")
-        -- initiate the editor system
-        local transform = tm.players.GetPlayerTransform(0)
-
-        local current_time = get_time()
-        local select_delay = 0.25
-        local select_interval = current_time + select_delay
-        local spawn_delay = 0.25
-        local spawn_interval = current_time + spawn_delay
-        local editor = storage.editor
-        editor.enabled = true
-        schedule_task("critical",
-          coroutine.create(
-            function()
-              while editor.enabled == true do
-                
-                coroutine.yield()
-              end
-            end
+        -- check for pre-existing map save
+        local map_name = meta_data.name
+        storage.editor.map_name = map_name
+        local map_save = tm.os.ReadAllText_Dynamic("maps/projects/" .. map_name)
+        if map_save ~= "" and map_save ~= "__empty" then
+          -- if a save exists, initialize all the objects
+          storage.editor.objects = load_objects(
+            json.parse(map_save).objects
           )
-        )
-
-        local name = meta_data.name
-
+        end
       end
     }
   },
   {"event",
     {
       type = "unload",
-      callback = function()
+      callback = function(meta_data)
+        local map_name = storage.editor.map_name
         storage.editor.enabled = false
-        print("unloaded.")
+        local object_cache = storage.editor.objects
+
+        -- saves data to file, and checks if file needs to be mentioned in projects file
+        local save_json = generate_save_json(object_cache)
+        tm.os.WriteAllText_Dynamic("maps/projects/" .. map_name, json.serialize(save_json))
+        local projects_file = tm.os.ReadAllText_Dynamic("maps/projects/_")
+        local projects_string = ""
+        if projects_file:find(map_name) == nil then
+          projects_string = map_name
+        end
+        for project in string.gmatch(projects_file, "[^\r\n]+") do
+          if project ~= "__empty" then
+            projects_string = projects_string .. ((projects_string == "") and "" or "\n") .. project
+          end
+        end
+        tm.os.WriteAllText_Dynamic(
+          "maps/projects/_", 
+          projects_string
+        )
+
+        -- converts top layer of objects into arra
+        local game_objects = {}
+        for _, value in pairs(object_cache) do
+          table.insert(game_objects, value)
+        end
+        -- further expands on `game_objects` array, recursively finding game objects and unloading them
+        local i = 1
+        while #game_objects >= i do
+          local value = game_objects[i]
+          local transform = value.transform
+          if transform ~= nil then
+            value.object.Despawn()
+          else
+            for _, inner_value in pairs(value) do
+              table.insert(game_objects, inner_value)
+            end
+          end
+          i = i + 1
+        end
+
+        --resets editor variables
+        storage.editor.objects = {}
+        storage.editor.map_name = ""
+        storage.editor.search_config.query = ""
+        storage.editor.attributes = {
+          name = "",
+          group = ""
+        }
       end
     }
   },
@@ -1022,7 +1931,7 @@ local map_editor = {
   },
   {"label",
     {
-      text = "::::::::::::Object Attributes:::::::::::::"
+      text = "Object Attributes:"
     }
   },
   {"input",
@@ -1052,15 +1961,36 @@ local map_editor = {
       end
     }
   },
+  {"page",
+    {
+      text = "Advanced",
+      definition = {
+        {"label",
+          {
+            text = "Variable Rotation"
+          }
+        },
+        {"input",
+          {
+            type = "number",
+            text = "min: 0",
+            callback = function(data, meta_data)
+
+            end
+          }
+        }
+      }
+    }
+  },
   {"label",
     {
-      text = "::::::::::::Available Objects::::::::::::"
+      text = "Available Objects:"
     }
   },
   {"search",
     {
       configuration = storage.editor.search_config,
-      callback = function(response)
+      callback = function(response, meta_data)
         local response_type = response.type
         local data = response.data
         if response_type == "update" then
@@ -1105,10 +2035,26 @@ local map_editor = {
                     break
                   end
                 end
-                update_editor_message("[√]: " .. name .. "=(" .. object_name .. ") " .. " has been added.", 5)
+                timed_change_ui(
+                  0,
+                  "editor_message",
+                  {
+                    original = "---------No Editor Messages---------",
+                    new = "[√]: " .. name .. "→\"" .. object_name .. "\" " .. " has been added."
+                  },
+                  5
+                )
               end
             else
-              update_editor_message("[√]: " .. name .. "=(" .. object_name .. ") " .. " has been added.", 5)
+              timed_change_ui(
+                0,
+                "editor_message",
+                {
+                  original = "---------No Editor Messages---------",
+                  new = "[√]: " .. name .. "→\"" .. object_name .. "\" " .. " has been added."
+                },
+                5
+              )
             end
           end
           print("index: " .. data[1])
@@ -1119,23 +2065,184 @@ local map_editor = {
   },
   {"page",
     {
-      text = "Modify Groupings & Objects",
+      text = "Modify Groups & Objects",
       definition = map_editor_object_component
     }
   },
   {"label",
     {
-      text = ":::::::::::::::::::Settings:::::::::::::::::::"
+      text = "::::::::::::::::::::::::::::::::::::::::::::::::::\n" ..
+             "Miscellaneous:"
     }
   },
   {"page",
     {
-      text = "Map Configuration"
+      text = "Map Options",
+      definition = {
+        {"label",
+          {
+            text = "Dangerous:"
+          }
+        },
+        {"button",
+          {
+            text = "Delete Map",
+            callback = function(data, meta_data)
+              local value = data.value
+              local player_id = meta_data["_"].player_id
+              if value == "Delete Map" then
+                timed_change_ui(
+                  player_id,
+                  data.id,
+                  {
+                    original = "Delete Map",
+                    new = "This cannot be reversed."
+                  },
+                  2
+                )
+              elseif value == "This cannot be reversed." then
+                timed_change_ui(
+                  player_id,
+                  data.id,
+                  {
+                    original = "Delete Map",
+                    new = "Press to confirm deletion."
+                  },
+                  2
+                )
+              else
+                local projects_file = tm.os.ReadAllText_Dynamic("maps/projects/_")
+                local projects_string = ""
+                local map_name = meta_data.name
+                for project in string.gmatch(projects_file, "[^\r\n]+") do
+                  if project ~= map_name then
+                    projects_string = projects_string .. ((projects_string == "") and "" or "\n") .. project
+                  end
+                end
+                if projects_string == "" then
+                  projects_string = "__empty"
+                end
+                tm.os.WriteAllText_Dynamic("maps/projects/_", projects_string)
+                tm.os.WriteAllText_Dynamic("maps/projects/" .. map_name, "__empty")
+                clear_ui(player_id)
+                render_ui(
+                  meta_data["_"].previous_definition.meta["_"].previous_definition,
+                  player_id
+                )
+              end
+            end
+          }
+        }
+      }
     }
   },
   {"page",
     {
-      text = "Export Map"
+      text = "Export Map",
+      definition = {
+        {"event",
+          {
+            type = "draw",
+            callback = function()
+              return {
+                export = storage.editor.export
+              }
+            end
+          }
+        },
+        {"label",
+          {
+            text = "Map Name:"
+          }
+        },
+        {"input",
+          {
+            type = "text",
+            text = |meta_data| meta_data.export.name,
+            callback = function(data, meta_data)
+              meta_data.export.name = data.value
+            end
+          }
+        },
+        {"label",
+          {
+            text = "Author(s):"
+          }
+        },
+        {"input",
+          {
+            type = "text",
+            text = |meta_data| meta_data.export.authors,
+            callback = function(data, meta_data)
+              meta_data.export.authors = data.value
+            end
+          }
+        },
+        {"page",
+          {
+            text = "Preview Content",
+            definition = {
+              {"label",
+                {
+                  text = ":::::::::::::::::::Preview:::::::::::::::::::"
+                }
+              },
+              {"conditional",
+                {
+                  callback = |meta_data| meta_data.export.name ~= "",
+                  definition = {
+                    {"label",
+                      {
+                        text = |meta_data| meta_data.export.name
+                      }
+                    }
+                  }
+                }
+              },
+              {"conditional",
+                {
+                  callback = |meta_data| meta_data.export.authors ~= "",
+                  definition = {
+                    {"label",
+                      {
+                        text = |meta_data| "∟ " .. meta_data.export.authors
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {"label",
+          {
+            text = "::::::::::::::::::::::::::::::::::::::::::::::::::"
+          }
+        },
+        {"button",
+          {
+            text = "Loader Type: gradual",
+            callback = function(data, meta_data)
+
+            end
+          }
+        },
+        {"button",
+          {
+            text = "Click to Export Map",
+            callback = function(data, meta_data)
+              tm.os.WriteAllText_Dynamic(
+                "maps/projects/exported/" .. storage.editor.map_name .. "/data_static/map",
+                json.serialize(generate_save_json(storage.editor.objects))
+              )
+              tm.os.WriteAllText_Dynamic(
+                "maps/projects/exported/" .. storage.editor.map_name .. "/main.lua",
+                tm.os.ReadAllText_Static("gradual_loader.lua")
+              )
+            end
+          }
+        }
+      },
     }
   }
 }
@@ -1501,19 +2608,13 @@ local definition = {
             access = { 0 },
             text = "Map Editor",
             definition = {
-              {"event",
-                {
-                  type = "load",
-                  callback = function()
-                    storage.editor.map_name = "map_" .. random_id(6)
-                  end
-                }
-              },
               {"input",
                 {
                   type = "text",
                   text = function()
-                    return "Map Name: " .. storage.editor.map_name
+                    local random_name = "map_" .. random_id(6)
+                    storage.editor.map_name = random_name
+                    return "Map Name: " .. random_name
                   end,
                   callback = function(data)
                     storage.editor.map_name = data.value
@@ -1522,7 +2623,6 @@ local definition = {
               },
               {"page",
                 {
-                  access = { 0 },
                   text = "Create Map",
                   callback = function()
                     return {
@@ -1536,6 +2636,38 @@ local definition = {
                 {
                   text = "::::::::::::::::::::::::::::::::::::::::::::::::::\n" ..
                          "Saved Projects:                          "
+                }
+              },
+              {"loop",
+                {
+                  callback = function()
+                    local projects_list = {}
+                    local projects = tm.os.ReadAllText_Dynamic("maps/projects/_")
+                    for project in string.gmatch(projects, "[^\r\n]+") do
+                      if project ~= "__empty" then
+                        table.insert(projects_list,
+                        {
+                          name = project
+                        }
+                      )
+                      end
+                    end
+                    
+                    return projects_list
+                  end,
+                  definition = {
+                    {"page",
+                      {
+                        text = |meta_data| meta_data.name,
+                        callback = function(data, meta_data)
+                          return {
+                            name = meta_data.name
+                          }
+                        end,
+                        definition = map_editor
+                      }
+                    }
+                  }
                 }
               }
             }
